@@ -1,5 +1,8 @@
+WiFiCredentials.h
+
 # Prerequisites
 *.d
+
 
 # Object files
 *.o
