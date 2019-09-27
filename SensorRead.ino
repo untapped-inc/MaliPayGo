@@ -14,6 +14,7 @@
 #define URL "maliapi.azurewebsites.net"
 #define DEVICE_ID 1
 #define REMAINING_VOLUME_ADDRESS 0
+#define VSLP_ADDRESS 20
 
 //the number of milliliters that have been detected by the sensor per pulse (rising and falling edge)
 const int ML_PER_PULSE = 500;
@@ -32,16 +33,15 @@ long previousWifiTime;
 //total milliseconds per ORP sample 5 minutes
 const long ORP_SAMPlE_MILLIS = 20000; //todo: set this back after testing to 300000;
 // interval at which to communicate (milliseconds)
-const int WIFI_INTERVAL = 1000;
-
-//set to true when it's time to send new sensor data up
-bool newDataExists = false;
+const int WIFI_INTERVAL = 10000;
 
 //variables to monitor water consumption
 long pulseA = 0;
 long pulseB = 0;
-int remainingVolume = 0;
 bool isPulseA = true;
+int remainingVolume = 0;
+//this variable tracks how much water has been used since the last API post was successful
+int volumeSinceLastPost = 0;
 
 //used for JSON Deserilization
 StaticJsonDocument<1024> jsonDoc1;
@@ -53,25 +53,25 @@ void setup() {
   pinMode(ORP_PIN, INPUT);
   Serial.println("Starting");
   status = WiFi.begin(WifiSSID, WifiPassword);
-
+  
   while (WiFi.status() != WL_CONNECTED) {  //Wait for the WiFI connection completion
     delay(500);
     Serial.println("Waiting for connection");
   }
   
   initTimekeeping();
-
+  
   //data stored in eeprom - pull this data out of memory
   EEPROM.get(REMAINING_VOLUME_ADDRESS, remainingVolume);
-  remainingVolume = 20000;
-
+  EEPROM.get(VSLP_ADDRESS, volumeSinceLastPost);
+  
   pinMode(RELAY_PIN, OUTPUT);
   //make sure that the water is off when we start
   turnWaterOff();
   //track time to make sure we only sample once per 5 minutes
   previousORPSampleTime = millis();
   previousWifiTime = previousORPSampleTime;
-
+  
   //setup a timer interrupt to read from the analog pin - based on examples at https://forum.arduino.cc/index.php?topic=614128.0 and https://forum.arduino.cc/index.php?topic=616813.0
   TCB1.CTRLB = TCB_CNTMODE_INT_gc; // timer compare mode
   TCB1.CCMP = 125000; //The processor is 250k Hz. This number is the number of clock cycles per interrupt (i.e. 125,000 = 2 HZ)
@@ -100,39 +100,34 @@ void loop() {
 
   //turn off the pump/valve if the balance is empty
   if (remainingVolume <= 0 ){
-    Serial.println("turning relay off");
-    Serial.println(remainingVolume);
     turnWaterOff();
   }else{
     turnWaterOn();
   }
   
-  /*
-    //this deals with communication when the water is not flowing
-    //check to make sure that enough time has elapsed before attempting communication
-    if (loopTime - previousWifiTime > WIFI_INTERVAL){
-      previousWifiTime = loopTime;
-      //if there is new data, send it, otherwise check the API
-      if (!newDataExists){
-        //sends the GET HTTP request
-        //getData();
-      }else{
-        //todo: send the data - this needs to be implemented in future versions
-        //String flowmeterData = readFile(FLOWMETER_FILENAME);
-        //String orpData = readFile(ORP_FILENAME);
-        /*Serial.print("flowmeter Data: ");
-        Serial.println(flowmeterData);
+  //check to make sure that enough time has elapsed before attempting communication
+  if (loopTime - previousWifiTime > WIFI_INTERVAL){
+    previousWifiTime = loopTime;
+    //send the volume consumed 
+    String requestBody = 
+    "{\n    \"clientReadings\": {\n        \"sensorA\": [],\n        \"sensorB\": []\n    },\n    \"deviceId\": 1,\n    \"millilitersConsumed\" : 999\n}";
+         /* "{\"clientReadings\": {\"sensorA\": [],\"sensorB\": []}, \"deviceId\": "
+           + String(DEVICE_ID) + 
+           ", \"millilitersConsumed\" : " + String(volumeSinceLastPost) + 
+          "}";*/
+          
+    //send the request
+    postData(requestBody);
+    checkResponse();          
+  }
+    
+      /*
         
 
         //orpData.trim();
 
         String orpData = "";
-               
-        unsigned long createdAtTime = getCurrentTime();
-
-
-        //todo: remove this variable after testing is done
-        currentWaterAmount = 12345;
+     
         
         String requestBody = 
         "{\"clientReadings\":{\"sensorA\": [],\"sensorB\": [ " + orpData + "] },\"clientDevice\":{ \"id\": "
@@ -191,29 +186,6 @@ String readFile(const char *filename){
   }
   return fileContents;
 }
-
-void appendSensor(unsigned long value, bool isSensorA){
-  //todo: in future versions, allow the ORP to be appended
-  File sensorFile;
-  /*
-  if (isSensorA){
-    sensorFile =  SD.open(FLOWMETER_FILENAME, FILE_WRITE);
-  }else{
-    sensorFile = SD.open(ORP_FILENAME, FILE_WRITE);
-  }
-  */
-  //if (sensorFile){
-    char buffer[1000];
-    long unixTime = getCurrentTime();
-    sprintf(buffer, "{\"created_at\": %lu, \"value\": %lu }", unixTime, value); 
-    //Serial.println(buffer);
-    //sensorFile.println(buffer);
-  /*}else{
-    Serial.println("Failed to open for print");
-  }
-  sensorFile.close();*/
-}
-
 
 long getCurrentTime(){
   return startTime + ( millis()-startingMillis);
