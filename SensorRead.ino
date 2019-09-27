@@ -3,6 +3,7 @@
 #include <WiFiNINA.h>
 #include "WiFiCredentials.h"
 #include <EEPROM.h>
+#include <ArduinoHttpClient.h>
  
 //September 2019: This code is a stopgap for the hardware in Mali. It is intended to count pulses flowing through the  flowmeter, enable/disable the relay based on current volume, and transmit volume consumed to a remote API endpoint
 
@@ -15,6 +16,8 @@
 #define DEVICE_ID 1
 #define REMAINING_VOLUME_ADDRESS 0
 #define VSLP_ADDRESS 20
+#define ERROR_CODE -9999
+#define SUCCESSFUL_RESPONSE_CODE 200
 
 //the number of milliliters that have been detected by the sensor per pulse (rising and falling edge)
 const int ML_PER_PULSE = 500;
@@ -22,7 +25,9 @@ const int ML_PER_PULSE = 500;
 //variable to store the flowmeter readings for future comparison
 float previousFlowmeter = -9999;
 
-WiFiClient client;
+
+WiFiClient wifi;
+HttpClient client = HttpClient(wifi, URL, 80);
 int status = WL_IDLE_STATUS;
 
 long startTime = 0;
@@ -68,8 +73,7 @@ void setup() {
   pinMode(RELAY_PIN, OUTPUT);
   //make sure that the water is off when we start
   turnWaterOff();
-  //track time to make sure we only sample once per 5 minutes
-  previousORPSampleTime = millis();
+
   previousWifiTime = previousORPSampleTime;
   
   //setup a timer interrupt to read from the analog pin - based on examples at https://forum.arduino.cc/index.php?topic=614128.0 and https://forum.arduino.cc/index.php?topic=616813.0
@@ -86,14 +90,18 @@ void loop() {
   if (isPulseA){
     //switch which variables is being written to, so that incoming pulses aren't lost during calculation and transmission
     isPulseA = !isPulseA;
-    remainingVolume -= (pulseA * ML_PER_PULSE);
+    volumeSinceLastPost += (pulseA * ML_PER_PULSE);
     //reset pulses
     pulseA = 0;
   }else{
     isPulseA = !isPulseA;
-    remainingVolume -= (pulseB * ML_PER_PULSE);
+    volumeSinceLastPost += (pulseB * ML_PER_PULSE);
     pulseB = 0;
   }
+  Serial.print("VSLP: ");
+  Serial.println(volumeSinceLastPost);
+  remainingVolume -= volumeSinceLastPost;
+
 
   //write the remaining volume to memory in case the device crashes
   EEPROM.put(REMAINING_VOLUME_ADDRESS, remainingVolume);
@@ -110,82 +118,23 @@ void loop() {
     previousWifiTime = loopTime;
     //send the volume consumed 
     String requestBody = 
-    "{\n    \"clientReadings\": {\n        \"sensorA\": [],\n        \"sensorB\": []\n    },\n    \"deviceId\": 1,\n    \"millilitersConsumed\" : 999\n}";
-         /* "{\"clientReadings\": {\"sensorA\": [],\"sensorB\": []}, \"deviceId\": "
-           + String(DEVICE_ID) + 
-           ", \"millilitersConsumed\" : " + String(volumeSinceLastPost) + 
-          "}";*/
+    "{\n    \"clientReadings\": {\n        \"sensorA\": [],\n        \"sensorB\": []\n },\n    \"deviceId\": " + String(DEVICE_ID) + ",\n    \"millilitersConsumed\" : " + String(volumeSinceLastPost) + "\n}";
           
     //send the request
-    postData(requestBody);
-    checkResponse();          
+    int responseFromServer = postData(requestBody);
+    if (responseFromServer != ERROR_CODE){
+      //if the POST succeeds, then overwrite the total ML with whatever the server tells us
+      remainingVolume = responseFromServer;
+      //reset the volume since last post
+      volumeSinceLastPost = 0;
+    }
   }
-    
-      /*
-        
-
-        //orpData.trim();
-
-        String orpData = "";
-     
-        
-        String requestBody = 
-        "{\"clientReadings\":{\"sensorA\": [],\"sensorB\": [ " + orpData + "] },\"clientDevice\":{ \"id\": "
-        + String(DEVICE_ID) +
-        ",\"current_water_amount\": " + currentWaterAmount +
-        ",\"max_water_amount\":{ \"value\": " + maxWaterAmount + ", \"created_at\": " + createdAtTime + " }}}";
-        
-       //Serial.print("request body: ");
-       //Serial.println(requestBody);
-        postData(requestBody);
-
-        //clean up the old data
-        //SD.remove(FLOWMETER_FILENAME);
-        //July 10, 2019: this file isn't being overwritten because we can't send it up to the endpoint yet
-        //SD.remove(ORP_FILENAME);
-        newDataExists = false;
-      }
-    }
-    //check for the response to the HTTP GET Request - this sets the max water and current water variables
-    checkResponse();
-    
-
-    //decide if we should turn the water on
-    if (currentWaterAmount > 0){
-      turnWaterOn();
-    }
-  }  
-
-  //ORP readings every 5 minutes
-  if (loopTime - previousORPSampleTime > ORP_SAMPlE_MILLIS){
-    int ORPReading = getORPReading(); //in mv
-    previousORPSampleTime = loopTime;
-    //grab reading from ORP Sensor
-    appendSensor(ORPReading, false);
-    newDataExists = true;
-  } */
-
+  
   delay(300);
 }
 
 
 /***Helper Functions***/
-
-String readFile(const char *filename){
-  Serial.println(filename);
-  String fileContents;
-  File sensorFile = SD.open(filename);
-  if (sensorFile){
-    while(sensorFile.available()){
-     fileContents += (char)sensorFile.read();
-      //Serial.write(sensorFile.read());
-    }
-    sensorFile.close();
-  }else{
-    Serial.println("Failed to open for read");
-  }
-  return fileContents;
-}
 
 long getCurrentTime(){
   return startTime + ( millis()-startingMillis);

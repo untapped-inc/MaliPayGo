@@ -1,4 +1,4 @@
-void postData(String body){
+void postDataold(String body){
   if(WiFi.status()== WL_CONNECTED){   //Check WiFi connection status
 
      if (client.connect(URL, 80)){
@@ -15,58 +15,58 @@ void postData(String body){
         client.println("Connection: close");
         client.println();
         client.println(body);
+
+       delay(5000);
+        while (client.available()) {
+          char c = client.read();
+          Serial.write(c);
+        }
+                
+        client.flush();
+        client.stop();
      }else{
       Serial.println("Error connecting to server");
      }
   }
 }
 
-//check for the response to the HTTP POST
-void checkResponse(){
-  //hold the JSON results
-  String deviceString;
-  //find the nested objects using this
-  int bracketCount = 0;
-  //read from the API response
-   while (client.available()) {
-     //Serial.println("checking response");
-    char c = (char)client.read();
-    Serial.print(c);
-   }
-}
+/*
+ * This was added because the body of the response to the 
+ * HTTP Post was coming back garbled in the original method.
+ * The Arduino HTTP Client library makes the request MUCH simpler and 
+ * decodes the response body
+ * 
+ * Returns the "millilitersRemaining" that are reported by the response body
+ */
+int postData(String body){
+  //here's an example for using this librayr: 
+  //https://github.com/arduino-libraries/ArduinoHttpClient/blob/master/examples/CustomHeader/CustomHeader.ino
+  client.beginRequest();
+  client.post("/api/PGWC");
+  client.sendHeader("Content-type", "application/json");
+  client.sendHeader("Content-Length", body.length());  
+  client.endRequest();
+  client.write((const byte*)body.c_str(), body.length());
 
-    /*
-    //wait for the JSON
-    if (c == '{'){
-      bracketCount++;
+
+  // read the status code and body of the response
+  int statusCode = client.responseStatusCode();
+  String response = client.responseBody();
+
+  if (statusCode == SUCCESSFUL_RESPONSE_CODE){
+    String totalMLBuffer = "";
+    
+    //loop through the responde body
+    for(int i = 0; i < response.length();  i++){
+      char responseChar = (char)response[i];
+      //parse out the total milliliters value
+      if (isDigit(responseChar)){
+        totalMLBuffer += responseChar;
+      }
     }
-    //start building the response string
-    if (bracketCount == 2){
-      deviceString += c;
-    }else if (bracketCount == 3){
-      maxWaterString +=c;
-    }
-  }
-  if (maxWaterString != "" && deviceString != ""){
-    //Serial.print("response string: " + responseString);
-    //deserialize
-    DeserializationError error1 = deserializeJson(jsonDoc1, deviceString);
-    DeserializationError error2 = deserializeJson(jsonDoc2, maxWaterString);
-    long currentWaterChar = jsonDoc1["current_water_amount"];
-    long maxWaterChar = jsonDoc2["value"];
-    if (currentWaterChar > 0){
-      //set the water variable
-      currentWaterAmount = currentWaterChar;
-      Serial.print("currrent water char ");
-      Serial.println(currentWaterChar);
-    }
-  
-    if(maxWaterChar > 0){
-      //set the max water variable
-      maxWaterAmount = maxWaterChar;
-      Serial.print("max water char ");
-      Serial.println(maxWaterChar);
-    }
+    //return the value
+    return totalMLBuffer.toInt();
+  }else{ 
+    return ERROR_CODE;
   }
 }
-*/
